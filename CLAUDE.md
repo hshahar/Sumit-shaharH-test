@@ -7,9 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 SHA's Kubernetes Blog Platform - A production-ready, GitOps-based blog platform demonstrating Kubernetes best practices with ArgoCD, Helm, and comprehensive security/observability features. This is a multi-environment (dev/staging/prod) infrastructure showcasing modern cloud-native patterns.
 
 **Technology Stack:**
-- Infrastructure: Terraform + Helm + Kubernetes (Rancher Desktop/Docker Desktop)
+- Infrastructure: Terraform + Helm + Kubernetes (Rancher Desktop/Docker Desktop/AWS EKS)
 - GitOps: ArgoCD for declarative deployment
 - Applications: React frontend (Vite) + FastAPI backend + PostgreSQL
+- AI/ML: Real-time AI scoring agent with dual model support (Ollama/OpenAI)
+- Logging: ELK Stack (Elasticsearch, Logstash, Kibana, Filebeat)
 - Progressive Delivery: Argo Rollouts (Canary deployments)
 - Autoscaling: KEDA (event-driven) + HPA
 - Monitoring: Prometheus + Grafana
@@ -143,6 +145,16 @@ terraform destroy -var-file="environments/dev.tfvars"
 
 ### ArgoCD Operations
 ```powershell
+# OPTION 1: Install ArgoCD via automated script (recommended)
+cd argocd/install
+
+# Install ArgoCD with custom configuration
+.\00-install-argocd.ps1  # or bash 00-install-argocd.sh
+
+# Install application using App-of-Apps pattern
+.\02-install-apps.ps1    # or bash 02-install-apps.sh
+
+# OPTION 2: Manual installation
 # Get admin password
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | ForEach-Object { [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($_)) }
 
@@ -177,6 +189,10 @@ kubectl port-forward -n monitoring svc/kube-prometheus-stack-prometheus 9090:909
 # Port-forward Vault
 kubectl port-forward -n vault svc/vault 8200:8200
 
+# Port-forward Kibana (ELK Stack)
+kubectl port-forward -n logging svc/kibana 5601:5601
+# Access: http://localhost:5601
+
 # View events
 kubectl get events -n sha-dev --sort-by='.lastTimestamp'
 
@@ -185,6 +201,62 @@ kubectl describe pod <pod-name> -n sha-dev
 
 # Shell into pod
 kubectl exec -it -n sha-dev <pod-name> -- /bin/sh
+```
+
+### AI Agent Operations
+```powershell
+# Check AI agent status
+kubectl get pods -n sha-dev -l app=ai-agent
+
+# View AI agent logs
+kubectl logs -n sha-dev -l app=ai-agent -f
+
+# Check current model configuration
+kubectl port-forward -n sha-dev svc/ai-agent 8000:8000
+curl http://localhost:8000/model
+
+# Manually trigger post scoring
+curl -X POST http://localhost:8000/score -H "Content-Type: application/json" -d '{"post_id": 1}'
+
+# View all scores
+curl http://localhost:8000/scores
+
+# Rebuild vector database
+curl -X POST http://localhost:8000/reindex
+```
+
+### ELK Stack Operations
+```powershell
+# Check ELK stack pods
+kubectl get pods -n logging
+
+# View Elasticsearch cluster health
+kubectl exec -n logging elasticsearch-0 -- curl -s http://localhost:9200/_cluster/health?pretty
+
+# View indices
+kubectl exec -n logging elasticsearch-0 -- curl -s http://localhost:9200/_cat/indices?v
+
+# Check Logstash pipeline
+kubectl logs -n logging -l app=logstash -f
+
+# View Filebeat logs
+kubectl logs -n logging -l app=filebeat --tail=100
+```
+
+### AWS EKS Operations (if deployed on AWS)
+```powershell
+# Update kubeconfig for EKS
+aws eks update-kubeconfig --region us-west-2 --name sha-blog-eks
+
+# Shutdown cluster to save costs (~$50-60/month)
+cd terraform/eks
+.\shutdown-cluster.ps1
+
+# Startup cluster
+.\startup-cluster.ps1
+
+# View AWS resources
+aws eks describe-cluster --name sha-blog-eks --region us-west-2
 ```
 
 ## Architecture Overview
@@ -200,6 +272,7 @@ kubectl exec -it -n sha-dev <pod-name> -- /bin/sh
 - `vault` - Secrets management
 - `keda` - Event-driven autoscaling
 - `argo-rollouts` - Progressive delivery
+- `logging` - ELK Stack (Elasticsearch, Logstash, Kibana, Filebeat)
 
 ### Key Infrastructure Components
 
@@ -215,8 +288,24 @@ kubectl exec -it -n sha-dev <pod-name> -- /bin/sh
 
 **Application Stack ([helm/microservices-app/](helm/microservices-app/)):**
 - Frontend: React + Vite (Nginx serving static files)
-- Backend: FastAPI (Python REST API)
-- Database: PostgreSQL 15 (StatefulSet with persistent storage)
+- Backend: FastAPI (Python REST API with Prometheus metrics, rate limiting)
+- Database: PostgreSQL 15 (StatefulSet with persistent storage, automated backups)
+- AI Agent: Real-time scoring service with RAG (dual model: Ollama/OpenAI)
+- Ollama: Local LLM inference (optional, for free AI scoring)
+
+**Logging Stack ([helm/elk-stack/](helm/elk-stack/)):**
+- Elasticsearch: Distributed search and analytics (10Gi storage)
+- Logstash: Log processing pipeline with JSON parsing
+- Kibana: Log visualization and exploration
+- Filebeat: DaemonSet log collector on each node
+
+**Cloud Infrastructure (Optional - [terraform/eks/](terraform/eks/)):**
+- AWS EKS cluster in us-west-2 (Oregon)
+- EC2-based Kubernetes with Spot instances (cost-optimized)
+- Auto-scaling node groups (2-10 nodes)
+- AWS Load Balancer Controller for ingress
+- EBS CSI Driver for persistent storage
+- CloudNative PostgreSQL operator for production databases
 
 ### GitOps Workflow
 
@@ -416,19 +505,27 @@ terraform init -migrate-state
 ### File Organization
 
 **Critical paths:**
-- `terraform/main.tf` - Infrastructure definitions
+- `terraform/main.tf` - Infrastructure definitions (local Kubernetes)
+- `terraform/eks/` - AWS EKS infrastructure (cloud deployment)
 - `terraform/environments/*.tfvars` - Environment configurations
 - `helm/microservices-app/values*.yaml` - Application configurations
 - `helm/microservices-app/templates/` - Kubernetes manifests (Deployment, Service, etc.)
+- `helm/ai-agent/` - AI scoring agent Helm chart
+- `helm/ollama/` - Local LLM inference Helm chart
+- `helm/elk-stack/` - ELK logging stack Helm chart
+- `helm/cloudnative-pg/` - CloudNative PostgreSQL operator chart
 - `argocd/app-of-apps.yaml` - ArgoCD master application
 - `argocd/applications/*.yaml` - Environment-specific ArgoCD apps
+- `argocd/install/` - ArgoCD installation automation scripts
 - `.github/workflows/golden-pipeline.yaml` - Complete CI/CD pipeline
 - `.github/PULL_REQUEST_TEMPLATE.md` - PR template with Kubernetes-specific checklist
 - `.github/ISSUE_TEMPLATE/` - Bug report and feature request templates
-- `app/backend/main.py` - FastAPI backend with Prometheus metrics
+- `app/backend/main.py` - FastAPI backend with Prometheus metrics, AI integration
 - `app/backend/test_api.py` - Comprehensive backend tests
 - `app/backend/conftest.py` - Test fixtures and configuration
-- `app/frontend/src/App.tsx` - React frontend entry point
+- `app/frontend/src/App.tsx` - React frontend with AI score display
+- `app/ai-agent/main_dual_model.py` - AI agent with Ollama/OpenAI support
+- `app/ai-agent/db_migration.sql` - Database schema for AI scoring
 
 ### Progressive Enhancement Path
 
@@ -456,6 +553,155 @@ When adding new features, follow this progression:
 **Scaling behavior is highly tuned:**
 - Scale up: fast (30s window, +100% or +4 pods/period)
 - Scale down: gradual (300s window, -50% or -2 pods/period)
+
+### AI Agent & Real-Time Scoring
+
+**Architecture Overview:**
+
+The platform includes an intelligent AI agent that automatically scores blog posts in real-time using RAG (Retrieval Augmented Generation) and supports dual models:
+
+**Key Features:**
+- **Real-time scoring**: Posts scored automatically on create/update (non-blocking background tasks)
+- **Dual model support**: Choose between free local models (Ollama) or premium cloud models (OpenAI)
+- **6 quality metrics**: Technical accuracy (25), clarity (20), completeness (20), code quality (15), SEO (10), engagement (10)
+- **Visual display**: Color-coded score badges in frontend (⭐ 90+, ✨ 80+, 👍 70+, 📝 60+, 💡 <60)
+- **RAG integration**: Uses vector database (ChromaDB) to find similar posts for context
+
+**Model Comparison:**
+
+| Model | Cost | Speed | Quality | Best For |
+|-------|------|-------|---------|----------|
+| Ollama (Llama3) | $0 | 10-15s | 85-90% | High volume, privacy, dev/test |
+| OpenAI GPT-4 | ~$0.01-0.02/post | 5-8s | 95%+ | Production, best quality |
+
+**Deployment:**
+
+```bash
+# Option 1: Free local model (Ollama)
+helm install ollama ./helm/ollama --namespace sha-dev
+helm upgrade sha-blog ./helm/microservices-app \
+  --set aiAgent.enabled=true \
+  --set aiAgent.modelProvider=ollama
+
+# Option 2: OpenAI (premium)
+helm upgrade sha-blog ./helm/microservices-app \
+  --set aiAgent.enabled=true \
+  --set aiAgent.modelProvider=openai \
+  --set aiAgent.openai.apiKey=sk-your-key
+```
+
+**How it Works:**
+1. User creates/updates post → Backend saves to DB
+2. Backend triggers AI agent via background task (non-blocking)
+3. AI agent retrieves post, finds similar posts (RAG)
+4. AI agent analyzes with LLM and calculates scores
+5. Scores stored in database
+6. Frontend displays score badge within 5-15 seconds
+
+**Files:**
+- [app/ai-agent/main_dual_model.py](app/ai-agent/main_dual_model.py) - Dual model AI agent
+- [helm/ai-agent/](helm/ai-agent/) - AI agent Helm chart
+- [helm/ollama/](helm/ollama/) - Ollama local LLM chart
+- [docs/REALTIME_AI_SCORING.md](docs/REALTIME_AI_SCORING.md) - Full deployment guide
+- [docs/DUAL_MODEL_AI_AGENT.md](docs/DUAL_MODEL_AI_AGENT.md) - Dual model configuration
+
+### ELK Stack Integration
+
+**Centralized Logging Architecture:**
+
+Complete ELK (Elasticsearch, Logstash, Kibana) stack for log aggregation, processing, and visualization:
+
+**Components:**
+- **Elasticsearch**: Distributed search engine for log storage (10Gi persistent storage)
+- **Logstash**: Log processing pipeline with JSON parsing, Kubernetes metadata enrichment
+- **Kibana**: Web UI for log visualization and analysis
+- **Filebeat**: DaemonSet collector running on each node, auto-discovers containers
+
+**Log Flow:**
+```
+Container Logs → Filebeat (collect) → Logstash (parse/enrich) → Elasticsearch (store) → Kibana (visualize)
+```
+
+**Features:**
+- Structured JSON logging from backend
+- Kubernetes metadata enrichment (namespace, pod, container)
+- FastAPI request/response logging with duration tracking
+- Nginx access logs parsing
+- Error tracking and alerting
+- Full-text search across all logs
+
+**Deployment:**
+
+```bash
+# Install ELK stack
+helm install elk-stack ./helm/elk-stack --namespace logging --create-namespace
+
+# Or via ArgoCD
+kubectl apply -f argocd/applications/elk-stack.yaml
+
+# Access Kibana
+kubectl port-forward -n logging svc/kibana 5601:5601
+# http://localhost:5601
+```
+
+**Common Queries in Kibana:**
+- Backend errors: `k8s_container: "backend" AND level: "ERROR"`
+- HTTP 500 errors: `status_code: 500`
+- Slow requests: `duration > 500`
+- Specific endpoint: `path: "/api/posts" AND http_method: "POST"`
+
+**Files:**
+- [helm/elk-stack/](helm/elk-stack/) - Complete ELK Helm chart
+- [docs/ELK_STACK_GUIDE.md](docs/ELK_STACK_GUIDE.md) - Comprehensive ELK guide
+- [elk/dashboards/](elk/dashboards/) - Kibana dashboard templates
+
+### AWS EKS Deployment (Cloud Infrastructure)
+
+**Production-Ready Cloud Deployment:**
+
+The platform can be deployed on AWS EKS for production workloads with cost-optimized configurations:
+
+**Features:**
+- **Region**: us-west-2 (Oregon) for lower costs
+- **Compute**: Spot instances (70% cheaper than On-Demand)
+- **Auto-scaling**: 2-10 nodes based on load
+- **Storage**: EBS gp3 volumes (20% cheaper than gp2)
+- **Load Balancing**: AWS ALB for ingress traffic
+- **Cost Management**: Shutdown scripts to save ~$50-60/month when not in use
+
+**Cost Breakdown:**
+- Running 24/7: ~$150-160/month
+- With shutdown nights/weekends: ~$105/month (EKS control plane + NAT gateway only)
+
+**Deployment:**
+
+```bash
+cd terraform/eks
+
+# Deploy EKS cluster (takes 15-20 minutes)
+terraform init
+terraform apply
+
+# Configure kubectl
+aws eks update-kubeconfig --region us-west-2 --name sha-blog-eks
+
+# Deploy application
+helm install sha-blog ../../helm/microservices-app \
+  --namespace sha-dev \
+  --values ../../helm/microservices-app/values-eks.yaml
+
+# Shutdown when not needed (saves ~$50-60/month)
+.\shutdown-cluster.ps1
+
+# Startup again
+.\startup-cluster.ps1
+```
+
+**Files:**
+- [terraform/eks/](terraform/eks/) - Complete EKS infrastructure
+- [terraform/eks/README.md](terraform/eks/README.md) - Detailed EKS deployment guide
+- [terraform/eks/shutdown-cluster.ps1](terraform/eks/shutdown-cluster.ps1) - Cost-saving script
+- [helm/cloudnative-pg/](helm/cloudnative-pg/) - Production PostgreSQL operator
 
 ### Recent Improvements (Latest Updates)
 
@@ -584,7 +830,22 @@ kubectl describe resourcequota -n sha-dev
 - [helm/microservices-app/README.md](helm/microservices-app/README.md) - Helm chart documentation
 - [argocd/README.md](argocd/README.md) - ArgoCD setup and GitOps workflow
 
+**AI & ML Features:**
+- [docs/REALTIME_AI_SCORING.md](docs/REALTIME_AI_SCORING.md) - Real-time AI scoring deployment guide
+- [docs/DUAL_MODEL_AI_AGENT.md](docs/DUAL_MODEL_AI_AGENT.md) - Dual model (Ollama/OpenAI) setup
+- [docs/DUAL_MODEL_QUICK_START.md](docs/DUAL_MODEL_QUICK_START.md) - Quick AI agent reference
+- [docs/AI_RAG_AGENT_PLAN.md](docs/AI_RAG_AGENT_PLAN.md) - Original RAG architecture plan
+- [REALTIME_AI_IMPLEMENTATION_SUMMARY.md](REALTIME_AI_IMPLEMENTATION_SUMMARY.md) - Complete implementation summary
+
+**Logging & Observability:**
+- [docs/ELK_STACK_GUIDE.md](docs/ELK_STACK_GUIDE.md) - Complete ELK stack guide
+- [elk/dashboards/README.md](elk/dashboards/README.md) - Kibana dashboard creation guide
+
+**Cloud Deployment:**
+- [terraform/eks/README.md](terraform/eks/README.md) - AWS EKS deployment guide with cost optimization
+
 **Reference Files:**
 - [CHEATSHEET.md](CHEATSHEET.md) - Command quick reference
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - Common issues and solutions
 - [ENVIRONMENTS.md](ENVIRONMENTS.md) - Environment comparison matrix
+- [docs/GRACEFUL_SHUTDOWN_ANALYSIS.md](docs/GRACEFUL_SHUTDOWN_ANALYSIS.md) - Graceful shutdown implementation

@@ -386,6 +386,20 @@ function App() {
           <p>
             Built with ❤️ using ArgoCD, Helm, and Kubernetes | GitOps-powered deployment | {posts.length} posts
           </p>
+          <div className="service-links">
+            <h3>📊 Platform Services</h3>
+            <div className="links-grid">
+              <a href="/grafana" target="_blank" rel="noopener noreferrer" className="service-link">
+                📈 Grafana
+              </a>
+              <a href="http://k8s-logging-kibana-f737ecb493-640190764.us-west-2.elb.amazonaws.com" target="_blank" rel="noopener noreferrer" className="service-link">
+                🔍 Kibana
+              </a>
+              <a href="/ai" target="_blank" rel="noopener noreferrer" className="service-link">
+                🤖 AI Agent
+              </a>
+            </div>
+          </div>
         </div>
       </footer>
     </div>

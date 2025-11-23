@@ -27,14 +27,6 @@ spec:
   - matches:
     - path:
         type: PathPrefix
-        value: /grafana
-    backendRefs:
-    - name: prometheus-grafana
-      namespace: monitoring
-      port: 80
-  - matches:
-    - path:
-        type: PathPrefix
         value: /
     backendRefs:
     - name: {{ include "microservices-app.fullname" . }}-frontend
