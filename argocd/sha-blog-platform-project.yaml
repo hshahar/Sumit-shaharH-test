@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: sha-blog-platform
+  namespace: argocd
+spec:
+  description: SHA Blog Platform - All Applications
+  
+  # Allow deploying to any namespace
+  destinations:
+    - namespace: '*'
+      server: https://kubernetes.default.svc
+  
+  # Allow all repos (you can restrict this later)
+  sourceRepos:
+    - 'https://github.com/hshahar/Sumit-shaharH-test.git'
+    - '*'
+  
+  # Allow all resources
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

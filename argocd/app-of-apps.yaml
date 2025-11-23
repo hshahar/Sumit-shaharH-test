@@ -8,10 +8,10 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: default
+  project: sha-blog-platform
   
   source:
-    repoURL: https://github.com/yourusername/k8s-blog-platform.git  # Change to your repo
+    repoURL: https://github.com/hshahar/Sumit-shaharH-test.git
     targetRevision: HEAD
     path: argocd/applications
   
