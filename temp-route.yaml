@@ -1,0 +1,76 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  annotations:
+    argocd.argoproj.io/tracking-id: sha-blog-dev:gateway.networking.k8s.io/HTTPRoute:sha-dev/sha-blog-dev-sha-microservices-app-frontend-route
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"annotations":{"argocd.argoproj.io/tracking-id":"sha-blog-dev:gateway.networking.k8s.io/HTTPRoute:sha-dev/sha-blog-dev-sha-microservices-app-frontend-route"},"labels":{"app.kubernetes.io/instance":"sha-blog-dev","app.kubernetes.io/managed-by":"Helm","app.kubernetes.io/name":"sha-microservices-app","app.kubernetes.io/version":"1.0.0","environment":"dev","helm.sh/chart":"sha-microservices-app-2.0.0"},"name":"sha-blog-dev-sha-microservices-app-frontend-route","namespace":"sha-dev"},"spec":{"parentRefs":[{"name":"sha-blog-dev-sha-microservices-app-gateway"}],"rules":[{"backendRefs":[{"name":"sha-blog-dev-sha-microservices-app-backend","port":8000}],"matches":[{"path":{"type":"PathPrefix","value":"/api"}}]},{"backendRefs":[{"name":"ai-agent","port":8000}],"matches":[{"path":{"type":"PathPrefix","value":"/ai"}}]},{"backendRefs":[{"name":"sha-blog-dev-sha-microservices-app-frontend","port":8080}],"matches":[{"path":{"type":"PathPrefix","value":"/"}}]}]}}
+  creationTimestamp: "2025-11-23T15:53:44Z"
+  generation: 3
+  labels:
+    app.kubernetes.io/instance: sha-blog-dev
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: sha-microservices-app
+    app.kubernetes.io/version: 1.0.0
+    environment: dev
+    helm.sh/chart: sha-microservices-app-2.0.0
+  name: sha-blog-dev-sha-microservices-app-frontend-route
+  namespace: sha-dev
+  resourceVersion: "233113"
+  uid: 20a171fe-b762-4767-99dc-e4a57d97ed2a
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: sha-blog-dev-sha-microservices-app-gateway
+  rules:
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: sha-blog-dev-sha-microservices-app-backend
+      port: 8000
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /api
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: ai-agent
+      port: 8000
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /ai
+  - backendRefs:
+    - group: ""
+      kind: Service
+      name: sha-blog-dev-sha-microservices-app-frontend
+      port: 8080
+      weight: 1
+    matches:
+    - path:
+        type: PathPrefix
+        value: /
+status:
+  parents:
+  - conditions:
+    - lastTransitionTime: "2025-11-23T19:12:49Z"
+      message: Route is accepted
+      observedGeneration: 3
+      reason: Accepted
+      status: "True"
+      type: Accepted
+    - lastTransitionTime: "2025-11-23T19:12:49Z"
+      message: Resolved all the Object references for the Route
+      observedGeneration: 3
+      reason: ResolvedRefs
+      status: "True"
+      type: ResolvedRefs
+    controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    parentRef:
+      group: gateway.networking.k8s.io
+      kind: Gateway
+      name: sha-blog-dev-sha-microservices-app-gateway
