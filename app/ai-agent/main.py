@@ -184,14 +184,29 @@ async def analyze_with_llm(post: Dict) -> Dict:
         if LLM_PROVIDER == "ollama":
             # Ollama returns string directly
             response_text = llm.invoke(prompt)
-            # Try to extract JSON from response
+            logger.info(f"Raw Ollama response (first 500 chars): {response_text[:500]}")
+            
+            # Try to extract JSON from response - find outermost braces
             import re
-            json_match = re.search(r'\{[^}]+\}', response_text, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
+            # Find the first { and last }
+            first_brace = response_text.find('{')
+            last_brace = response_text.rfind('}')
+            
+            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                json_str = response_text[first_brace:last_brace + 1]
+                # Clean up common escape issues
+                json_str = json_str.replace('\n', ' ').replace('\r', ' ')
+                # Remove invalid escape sequences
+                json_str = re.sub(r'\\(?!["\\/bfnrtu])', r'\\\\', json_str)
+                
+                try:
+                    result = json.loads(json_str)
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error: {e}. Cleaned JSON: {json_str[:200]}")
+                    raise ValueError(f"Invalid JSON response from Ollama: {str(e)}")
             else:
-                logger.error(f"Could not extract JSON from Ollama response: {response_text[:200]}")
-                raise ValueError("Invalid JSON response from Ollama")
+                logger.error(f"Could not find JSON braces in Ollama response: {response_text[:200]}")
+                raise ValueError("No JSON found in Ollama response")
         else:
             # OpenAI returns object with .content
             response = llm.invoke(prompt)
