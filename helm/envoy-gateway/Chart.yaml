@@ -1,0 +1,11 @@
+apiVersion: v2
+name: envoy-gateway
+description: Envoy Gateway for ingress traffic management
+type: application
+version: 1.0.0
+appVersion: "v1.2.4"
+
+dependencies:
+  - name: gateway-helm
+    version: v1.2.4
+    repository: oci://docker.io/envoyproxy

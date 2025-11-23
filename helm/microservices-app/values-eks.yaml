@@ -160,9 +160,14 @@ aiAgent:
   persistence:
     storageClass: "ebs-gp3"  # Use EBS storage class for EKS
 
-# Ingress configuration - AWS ALB for EKS
-ingress:
+# Gateway API configuration - Using Envoy Gateway
+gateway:
   enabled: true
+  className: eg  # Envoy Gateway class
+
+# Legacy Ingress configuration - DISABLED (using Gateway API instead)
+ingress:
+  enabled: false
   className: alb  # Use ALB instead of nginx
   host: ""  # Leave empty, we'll use ALB DNS
   annotations:

@@ -1,0 +1,45 @@
+global:
+  images:
+    envoyGateway:
+      image: docker.io/envoyproxy/gateway:v1.2.4
+    ratelimit:
+      image: docker.io/envoyproxy/ratelimit:master
+
+config:
+  envoyGateway:
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    provider:
+      type: Kubernetes
+      kubernetes:
+        rateLimitDeployment:
+          replicas: 1
+          pod:
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/port: "19001"
+        shutdownManager:
+          image: docker.io/envoyproxy/gateway-dev:latest
+    logging:
+      level:
+        default: info
+
+deployment:
+  replicas: 1
+  pod:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "19001"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1024Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
