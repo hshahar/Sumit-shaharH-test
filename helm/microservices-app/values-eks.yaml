@@ -43,6 +43,15 @@ frontend:
     requests:
       cpu: 100m
       memory: 128Mi
+  # Graceful shutdown configuration
+  terminationGracePeriodSeconds: 30  # Long enough for nginx to finish connections
+  preStopSleepSeconds: 10  # Allow Service/Ingress to remove from rotation
+  minReadySeconds: 10  # Wait before trusting new pod
+  readinessProbe:
+    periodSeconds: 3  # Tight readiness for quick drain detection
+  pdb:
+    enabled: true
+    minAvailable: 1  # Keep at least 1 pod available during disruptions
   autoscaling:
     enabled: true
     minReplicas: 1
@@ -87,6 +96,15 @@ backend:
     requests:
       cpu: 200m
       memory: 256Mi
+  # Graceful shutdown configuration
+  terminationGracePeriodSeconds: 60  # Long enough for slowest request/job
+  preStopSleepSeconds: 10  # Allow Service/Ingress to remove from rotation
+  minReadySeconds: 10  # Wait before trusting new pod
+  readinessProbe:
+    periodSeconds: 3  # Tight readiness for quick drain detection
+  pdb:
+    enabled: true
+    minAvailable: 1  # Keep at least 1 pod available during disruptions
   autoscaling:
     enabled: true
     minReplicas: 1
