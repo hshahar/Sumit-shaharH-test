@@ -31,8 +31,8 @@ frontend:
   enabled: true
   replicas: 1
   image:
-    repository: nginx
-    tag: "1.25-alpine"
+    repository: 179580348028.dkr.ecr.us-west-2.amazonaws.com/sha-blog-frontend
+    tag: "v1.0"
     pullPolicy: IfNotPresent
   service:
     port: 8080  # Use port 8080 to avoid root permission issues
@@ -84,8 +84,8 @@ backend:
   enabled: true
   replicas: 1
   image:
-    repository: python
-    tag: "3.11-slim"
+    repository: 179580348028.dkr.ecr.us-west-2.amazonaws.com/sha-blog-backend
+    tag: "v1.0"
     pullPolicy: IfNotPresent
   service:
     port: 8000
@@ -154,8 +154,8 @@ postgresql:
 aiAgent:
   enabled: true
   image:
-    repository: python
-    tag: "3.11-slim"
+    repository: 179580348028.dkr.ecr.us-west-2.amazonaws.com/sha-blog-ai-agent
+    tag: "v1.0"
     pullPolicy: IfNotPresent
   persistence:
     storageClass: "ebs-gp3"  # Use EBS storage class for EKS
