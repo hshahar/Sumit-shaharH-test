@@ -116,19 +116,43 @@ jobs:
           cd app/frontend
           npm audit --audit-level=high || true
 
-  # Stage 3: Build Docker Images
-  build-images:
-    name: Build Docker Images
+  # Stage 3: SonarQube Code Quality
+  code-quality:
+    name: SonarQube Analysis
     runs-on: ubuntu-latest
     needs: security-scan
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@master
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        continue-on-error: true
+
+      - name: SonarQube Quality Gate
+        uses: sonarsource/sonarqube-quality-gate-action@master
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        continue-on-error: true
+
+  # Stage 4: Build Docker Images (Parallelized)
+  build-backend:
+    name: Build Backend Image
+    runs-on: ubuntu-latest
+    needs: code-quality
     if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
     outputs:
       image_tag: ${{ steps.tags.outputs.tag }}
-      backend_digest: ${{ steps.backend_build.outputs.digest }}
-      frontend_digest: ${{ steps.frontend_build.outputs.digest }}
+      digest: ${{ steps.build.outputs.digest }}
     
     steps:
       - name: Checkout code
@@ -154,7 +178,7 @@ jobs:
           echo "Generated tag: ${TAG}"
 
       - name: Build and push backend image
-        id: backend_build
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./app/backend
@@ -167,8 +191,43 @@ jobs:
           provenance: true
           sbom: true
 
+  build-frontend:
+    name: Build Frontend Image
+    runs-on: ubuntu-latest
+    needs: code-quality
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.tags.outputs.tag }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: tags
+        run: |
+          BRANCH=${GITHUB_REF#refs/heads/}
+          SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)
+          TAG="${BRANCH}-${SHORT_SHA}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Generated tag: ${TAG}"
+
       - name: Build and push frontend image
-        id: frontend_build
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: ./app/frontend
@@ -181,11 +240,11 @@ jobs:
           provenance: true
           sbom: true
 
-  # Stage 4: Container Scanning
+  # Stage 5: Container Scanning
   scan-images:
     name: Scan Container Images
     runs-on: ubuntu-latest
-    needs: build-images
+    needs: [build-backend, build-frontend]
     permissions:
       contents: read
       security-events: write
@@ -193,7 +252,7 @@ jobs:
       - name: Run Trivy scanner on backend image
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:${{ needs.build-images.outputs.image_tag }}'
+          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:${{ needs.build-backend.outputs.image_tag }}'
           format: 'sarif'
           output: 'trivy-backend-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -208,7 +267,7 @@ jobs:
       - name: Run Trivy scanner on frontend image
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ needs.build-images.outputs.image_tag }}'
+          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ needs.build-frontend.outputs.image_tag }}'
           format: 'sarif'
           output: 'trivy-frontend-results.sarif'
           severity: 'CRITICAL,HIGH'
@@ -220,11 +279,11 @@ jobs:
           sarif_file: 'trivy-frontend-results.sarif'
           category: 'frontend-image'
 
-  # Stage 5: Sign Images with Cosign
+  # Stage 6: Sign Images with Cosign
   sign-images:
     name: Sign Container Images
     runs-on: ubuntu-latest
-    needs: [build-images, scan-images]
+    needs: [build-backend, build-frontend, scan-images]
     permissions:
       contents: read
       packages: write
@@ -243,30 +302,30 @@ jobs:
       - name: Sign backend image
         run: |
           cosign sign --yes \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend@${{ needs.build-images.outputs.backend_digest }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend@${{ needs.build-backend.outputs.digest }}
 
       - name: Sign frontend image
         run: |
           cosign sign --yes \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend@${{ needs.build-images.outputs.frontend_digest }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend@${{ needs.build-frontend.outputs.digest }}
 
       - name: Verify signatures
         run: |
           cosign verify \
             --certificate-identity-regexp='https://github.com/${{ github.repository }}' \
             --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend@${{ needs.build-images.outputs.backend_digest }}
-          
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend@${{ needs.build-backend.outputs.digest }}
+
           cosign verify \
             --certificate-identity-regexp='https://github.com/${{ github.repository }}' \
             --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend@${{ needs.build-images.outputs.frontend_digest }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend@${{ needs.build-frontend.outputs.digest }}
 
-  # Stage 6: Generate and Attach SBOM
+  # Stage 7: Generate and Attach SBOM
   generate-sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
-    needs: build-images
+    needs: [build-backend, build-frontend]
     permissions:
       contents: write
       packages: write
@@ -280,12 +339,12 @@ jobs:
 
       - name: Generate backend SBOM
         run: |
-          syft ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:${{ needs.build-images.outputs.image_tag }} \
+          syft ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/backend:${{ needs.build-backend.outputs.image_tag }} \
             -o spdx-json=backend-sbom.spdx.json
 
       - name: Generate frontend SBOM
         run: |
-          syft ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ needs.build-images.outputs.image_tag }} \
+          syft ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/frontend:${{ needs.build-frontend.outputs.image_tag }} \
             -o spdx-json=frontend-sbom.spdx.json
 
       - name: Upload SBOM artifacts
@@ -297,11 +356,11 @@ jobs:
             frontend-sbom.spdx.json
           retention-days: 90
 
-  # Stage 7: Policy Check with Kyverno
+  # Stage 8: Policy Check with Kyverno
   policy-check:
     name: Policy Validation
     runs-on: ubuntu-latest
-    needs: sign-images
+    needs: [sign-images, build-backend, build-frontend]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -319,8 +378,8 @@ jobs:
         run: |
           helm template k8s-blog ./helm/microservices-app \
             --values helm/microservices-app/values-${{ github.ref == 'refs/heads/main' && 'prod' || github.ref == 'refs/heads/staging' && 'staging' || 'dev' }}.yaml \
-            --set backend.image.tag=${{ needs.build-images.outputs.image_tag }} \
-            --set frontend.image.tag=${{ needs.build-images.outputs.image_tag }} \
+            --set backend.image.tag=${{ needs.build-backend.outputs.image_tag }} \
+            --set frontend.image.tag=${{ needs.build-frontend.outputs.image_tag }} \
             > manifests.yaml
 
       - name: Run Kyverno policy checks
@@ -328,11 +387,72 @@ jobs:
           kyverno apply ./helm/microservices-app/templates/kyverno-policies.yaml \
             --resource manifests.yaml
 
-  # Stage 8: Update Manifests and Deploy
+  # Stage 9: Performance Testing with k6
+  performance-test:
+    name: Performance Testing
+    runs-on: ubuntu-latest
+    needs: [build-backend, build-frontend, policy-check]
+    if: github.ref == 'refs/heads/staging' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring --keyring /usr/share/keyrings/k6-archive-keyring.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update
+          sudo apt-get install k6
+
+      - name: Create k6 test script
+        run: |
+          cat > load-test.js << 'EOF'
+          import http from 'k6/http';
+          import { check, sleep } from 'k6';
+
+          export const options = {
+            stages: [
+              { duration: '30s', target: 20 },
+              { duration: '1m', target: 50 },
+              { duration: '30s', target: 0 },
+            ],
+            thresholds: {
+              http_req_duration: ['p(95)<500'],
+              http_req_failed: ['rate<0.1'],
+            },
+          };
+
+          export default function () {
+            const BASE_URL = __ENV.BASE_URL || 'http://localhost:8000';
+
+            let res = http.get(`${BASE_URL}/health`);
+            check(res, {
+              'status is 200': (r) => r.status === 200,
+              'response time < 500ms': (r) => r.timings.duration < 500,
+            });
+
+            sleep(1);
+          }
+          EOF
+
+      - name: Run k6 load test
+        run: |
+          k6 run load-test.js --out json=test-results.json
+        continue-on-error: true
+
+      - name: Upload k6 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-results
+          path: test-results.json
+          retention-days: 30
+
+  # Stage 10: Update Manifests and Deploy
   update-manifests:
     name: Update Helm Values
     runs-on: ubuntu-latest
-    needs: [build-images, policy-check]
+    needs: [build-backend, build-frontend, policy-check]
     permissions:
       contents: write
     steps:
@@ -353,28 +473,234 @@ jobs:
           fi
 
       - name: Update Helm values
+        id: update
         run: |
           ENV=${{ steps.env.outputs.environment }}
-          TAG=${{ needs.build-images.outputs.image_tag }}
-          
+          TAG=${{ needs.build-backend.outputs.image_tag }}
+
           sed -i "s|tag:.*|tag: ${TAG}|g" helm/microservices-app/values-${ENV}.yaml
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "env=${ENV}" >> $GITHUB_OUTPUT
 
       - name: Commit and push changes
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
           git add helm/microservices-app/values-*.yaml
-          git commit -m "chore: update image tags to ${{ needs.build-images.outputs.image_tag }} [skip ci]" || exit 0
+          git commit -m "chore: update image tags to ${{ needs.build-backend.outputs.image_tag }} [skip ci]" || exit 0
           git push
 
-  # Stage 9: Notify ArgoCD
+      - name: Add Grafana annotation
+        if: ${{ secrets.GRAFANA_API_KEY != '' }}
+        run: |
+          ENV=${{ steps.env.outputs.environment }}
+          TAG=${{ steps.update.outputs.tag }}
+
+          curl -X POST "${{ secrets.GRAFANA_URL }}/api/annotations" \
+            -H "Authorization: Bearer ${{ secrets.GRAFANA_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"dashboardId\": null,
+              \"time\": $(date +%s)000,
+              \"tags\": [\"deployment\", \"${ENV}\", \"ci-cd\"],
+              \"text\": \"Deployed ${TAG} to ${ENV} environment\"
+            }" || echo "Failed to create Grafana annotation (non-critical)"
+
+  # Stage 11: ArgoCD Sync and Changelog
   notify-argocd:
-    name: Trigger ArgoCD Sync
+    name: Trigger ArgoCD Sync & Generate Changelog
     runs-on: ubuntu-latest
     needs: update-manifests
-    if: github.ref == 'refs/heads/develop'
+    permissions:
+      contents: write
     steps:
-      - name: ArgoCD sync notification
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine environment and app
+        id: env
         run: |
-          echo "✅ Manifests updated. ArgoCD will auto-sync the dev environment."
-          echo "For staging/prod, manual promotion is required via GitHub Actions workflow."
+          BRANCH=${GITHUB_REF#refs/heads/}
+          if [[ "$BRANCH" == "main" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+            echo "app=k8s-blog-prod" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == "staging" ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+            echo "app=k8s-blog-staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+            echo "app=k8s-blog-dev" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger ArgoCD webhook sync
+        if: ${{ secrets.ARGOCD_TOKEN != '' }}
+        run: |
+          APP_NAME="${{ steps.env.outputs.app }}"
+
+          curl -X POST "${{ secrets.ARGOCD_URL }}/api/v1/applications/${APP_NAME}/sync" \
+            -H "Authorization: Bearer ${{ secrets.ARGOCD_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"prune": false, "dryRun": false, "strategy": {"hook": {"force": true}}}' \
+            || echo "ArgoCD webhook failed, will auto-sync within 3 minutes"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" -10)
+          else
+            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)")
+          fi
+
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Send Slack notification
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+        run: |
+          ENV=${{ steps.env.outputs.environment }}
+          TAG=${{ needs.build-backend.outputs.image_tag }}
+          COMMITS="${{ steps.changelog.outputs.commits }}"
+
+          curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"text\": \"🚀 Deployment to *${ENV}* completed\",
+              \"blocks\": [
+                {
+                  \"type\": \"header\",
+                  \"text\": {
+                    \"type\": \"plain_text\",
+                    \"text\": \"🚀 Deployment Successful\"
+                  }
+                },
+                {
+                  \"type\": \"section\",
+                  \"fields\": [
+                    {\"type\": \"mrkdwn\", \"text\": \"*Environment:*\n${ENV}\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*Image Tag:*\n\`${TAG}\`\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*Branch:*\n${GITHUB_REF#refs/heads/}\"},
+                    {\"type\": \"mrkdwn\", \"text\": \"*Commit:*\n<${{ github.event.head_commit.url }}|${GITHUB_SHA:0:7}>\"}
+                  ]
+                },
+                {
+                  \"type\": \"section\",
+                  \"text\": {
+                    \"type\": \"mrkdwn\",
+                    \"text\": \"*Recent Changes:*\n${COMMITS}\"
+                  }
+                },
+                {
+                  \"type\": \"actions\",
+                  \"elements\": [
+                    {
+                      \"type\": \"button\",
+                      \"text\": {\"type\": \"plain_text\", \"text\": \"View Pipeline\"},
+                      \"url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+                    }
+                  ]
+                }
+              ]
+            }" || echo "Slack notification failed (non-critical)"
+
+      - name: Send Teams notification
+        if: ${{ secrets.TEAMS_WEBHOOK_URL != '' }}
+        run: |
+          ENV=${{ steps.env.outputs.environment }}
+          TAG=${{ needs.build-backend.outputs.image_tag }}
+
+          curl -X POST "${{ secrets.TEAMS_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"@type\": \"MessageCard\",
+              \"@context\": \"https://schema.org/extensions\",
+              \"summary\": \"Deployment to ${ENV}\",
+              \"themeColor\": \"0078D7\",
+              \"title\": \"🚀 Deployment Successful\",
+              \"sections\": [{
+                \"facts\": [
+                  {\"name\": \"Environment\", \"value\": \"${ENV}\"},
+                  {\"name\": \"Image Tag\", \"value\": \"${TAG}\"},
+                  {\"name\": \"Branch\", \"value\": \"${GITHUB_REF#refs/heads/}\"},
+                  {\"name\": \"Commit\", \"value\": \"${GITHUB_SHA:0:7}\"}
+                ]
+              }],
+              \"potentialAction\": [{
+                \"@type\": \"OpenUri\",
+                \"name\": \"View Pipeline\",
+                \"targets\": [{
+                  \"os\": \"default\",
+                  \"uri\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
+                }]
+              }]
+            }" || echo "Teams notification failed (non-critical)"
+
+  # Stage 12: Automated Rollback on Failure
+  monitor-deployment:
+    name: Monitor Deployment Health
+    runs-on: ubuntu-latest
+    needs: notify-argocd
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/staging'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Wait for deployment
+        run: |
+          echo "Waiting 3 minutes for ArgoCD sync and pod startup..."
+          sleep 180
+
+      - name: Check deployment health
+        id: health
+        run: |
+          ENV=${{ github.ref == 'refs/heads/main' && 'sha-production' || 'sha-staging' }}
+
+          # Check if pods are running
+          BACKEND_READY=$(kubectl get deployment -n ${ENV} backend -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+          FRONTEND_READY=$(kubectl get deployment -n ${ENV} frontend -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+
+          echo "Backend ready replicas: $BACKEND_READY"
+          echo "Frontend ready replicas: $FRONTEND_READY"
+
+          if [ "$BACKEND_READY" -eq "0" ] || [ "$FRONTEND_READY" -eq "0" ]; then
+            echo "healthy=false" >> $GITHUB_OUTPUT
+            exit 1
+          else
+            echo "healthy=true" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Rollback on failure
+        if: steps.health.outputs.healthy == 'false' && steps.health.conclusion == 'failure'
+        run: |
+          ENV=${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+
+          echo "⚠️ Deployment health check failed! Initiating rollback..."
+
+          # Get previous image tag from git history
+          PREV_TAG=$(git log --skip=1 -1 --pretty=format:"%s" | grep -oP 'tag:.*\K[^ ]+' || echo "")
+
+          if [ -n "$PREV_TAG" ]; then
+            echo "Rolling back to previous tag: $PREV_TAG"
+            sed -i "s|tag:.*|tag: ${PREV_TAG}|g" helm/microservices-app/values-${ENV}.yaml
+
+            git config --global user.name "GitHub Actions"
+            git config --global user.email "actions@github.com"
+            git add helm/microservices-app/values-${ENV}.yaml
+            git commit -m "chore: rollback to ${PREV_TAG} due to health check failure [skip ci]"
+            git push
+
+            # Notify about rollback
+            if [ -n "${{ secrets.SLACK_WEBHOOK_URL }}" ]; then
+              curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+                -H "Content-Type: application/json" \
+                -d "{\"text\": \"⚠️ *Rollback initiated* for ${ENV} environment due to deployment health check failure. Reverted to ${PREV_TAG}\"}"
+            fi
+          else
+            echo "No previous tag found for rollback"
+          fi
+        continue-on-error: true

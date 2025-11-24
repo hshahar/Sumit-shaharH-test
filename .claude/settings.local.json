@@ -35,7 +35,12 @@
       "Bash(powershell -File:*)",
       "Bash(where.exe:*)",
       "Bash(aws eks update-kubeconfig:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(for file in *.yaml)",
+      "Bash(do echo \"=== Checking $file ===\")",
+      "Bash(python -c \"import yaml; yaml.safe_load(open(''$file''))\")",
+      "Bash(echo:*)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []
